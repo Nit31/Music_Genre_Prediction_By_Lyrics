@@ -8,6 +8,52 @@ import json
 import pandas as pd
 import plotly.express as px
 import requests
+from clean_text import text_preprocessing_pipeline
+from transformers import AutoTokenizer, AutoModel
+import torch
+import torch.nn.functional as F
+
+
+# load labels
+with open(os.getcwd() + '/model/labels.txt', 'r') as f:
+    labels = f.read().splitlines()
+    f.close()
+
+
+# load model
+class BERTClass(torch.nn.Module):
+    def __init__(self):
+        super(BERTClass, self).__init__()
+        self.roberta = AutoModel.from_pretrained(model_name)
+        # self.l2 = torch.nn.Dropout(0.3)
+        # self.l1 = torch.nn.Linear(768, 256)
+        self.fc = torch.nn.Linear(768,5)
+
+    def forward(self, ids, mask, token_type_ids):
+        _, features = self.roberta(ids, attention_mask = mask, token_type_ids = token_type_ids, return_dict=False)
+        #features = F.relu(self.l1(features))
+        # output_2 = self.l2(output_1)
+        output = F.softmax(self.fc(features), dim=1)
+        return output
+model = BERTClass()
+model.load_state_dict(torch.load(os.getcwd() + '/model/model4.bin', map_location=torch.device('cpu')))
+vectorizer = AutoTokenizer.from_pretrained(model_name)
+
+
+def predict(text):
+    text = text_preprocessing_pipeline(text)
+    text = vectorizer.encode_plus(text,
+                                  truncation=True,
+                                  add_special_tokens=True,
+                                  max_length=200,
+                                  padding='max_length',
+                                  return_token_type_ids=True
+                                  )
+    input_ids = torch.tensor(text['input_ids']).unsqueeze(0)
+    attention_mask = torch.tensor(text['attention_mask']).unsqueeze(0)
+    token_type_ids = torch.tensor(text['token_type_ids']).unsqueeze(0)
+    output = model(input_ids, attention_mask, token_type_ids).detach().numpy()
+    return labels[output.argmax().item()]
 
 
 DATA = './data/top_words.csv'
@@ -16,11 +62,6 @@ DATA = './data/top_words.csv'
 def load_data():
     return pd.read_csv(DATA)
 
-
-# load labels
-with open(os.getcwd() + '/model/labels.txt', 'r') as f:
-    labels = f.read().splitlines()
-    f.close()
 
 # draw a map
 def draw_map_cases():
@@ -57,18 +98,12 @@ if select_event == 'Жанровый классификатор':
     # display the name when the submit button is clicked
     # .title() is used to get the input text string
     if(st.button('Submit')):
-        with open('./data/server.json') as json_file:
-            server = json.load(json_file)
-            responce = eval(requests.get('http://' + server['ip_address'] + '/predict/' + lyrics.title()).text)
-
-        genre = responce['predict']
-        title = responce['title']
+        genre = predict(lyrics)
 
         col1, col2 = st.columns(2)
         with col1:
             st.markdown(f"<h2 style='color:black'>Жанр: <span style='color:red'>{genre}</span></h2>", unsafe_allow_html=True)
-        with col2:
-            st.markdown(f"<h2 style='color:black'>Сгенерированное название: <span style='color:red'>{title}</span></h2>", unsafe_allow_html=True)
+
         st.balloons()
 
         if(genre == 'rhythm and blues'):
@@ -108,7 +143,4 @@ if select_event == 'Жанровый классификатор':
 if select_event == 'Интерактивная карта':
     st.markdown("<h1 style='text-align: center; color: #322c2c;'>Самые популярные слова в треках разных стран</h1>", unsafe_allow_html=True)
     # st.title('Самые популярные слова в странах мира')
-    st.plotly_chart(draw_map_cases(),
-                    use_container_width=True
-                    )
-
+    st.plotly_chart(draw_map_cases(), use_container_width=True)
